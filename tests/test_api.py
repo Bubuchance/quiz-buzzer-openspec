@@ -161,3 +161,44 @@ def test_websocket_rejects_bad_token(client):
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/ws?token=bad") as w:
             w.receive_json()
+
+
+def test_passcode_generated_when_not_configured(monkeypatch):
+    monkeypatch.delenv("TEACHER_PASSCODE", raising=False)
+    app = create_app()
+    code = app.state.activity.teacher_passcode
+    assert len(code) == 6 and code.isdigit()
+
+
+def test_passcode_from_environment(monkeypatch):
+    monkeypatch.setenv("TEACHER_PASSCODE", "env-secret")
+    with TestClient(create_app()) as c:
+        assert c.post("/api/teacher/login", json={"passcode": "env-secret"}).status_code == 200
+
+
+def test_reconnect_receives_latest_state(client):
+    """模擬斷線期間老師結束搶答：重新連線後第一個快照就是「已結束」與結果。"""
+    t = teacher(client)
+    upload(client, t, single_workbook())
+    s1 = student(client, 1)
+    with client.websocket_connect(f"/ws?token={s1}") as w:
+        assert w.receive_json()["state"]["phase"] == "ready"
+    client.post("/api/teacher/open", headers=auth(t))
+    client.post("/api/teacher/close", headers=auth(t))
+    with client.websocket_connect(f"/ws?token={s1}") as w:
+        state = w.receive_json()["state"]
+        assert state["phase"] == "closed" and "results" in state
+
+
+def test_teacher_receives_new_submission_live(client):
+    t = teacher(client)
+    upload(client, t, single_workbook())
+    s3 = student(client, 3, "阿三")
+    with client.websocket_connect(f"/ws?token={t}") as wt:
+        wt.receive_json()
+        client.post("/api/teacher/open", headers=auth(t))
+        wt.receive_json()
+        client.post("/api/student/submit", headers=auth(s3), json={"number": 1, "answers": ["實作"]})
+        q1 = wt.receive_json()["state"]["results"]["questions"][0]
+        assert q1["submissions"][0]["group"] == 3 and q1["submissions"][0]["rank"] == 1
+        assert q1["winner"]["group"] == 3
