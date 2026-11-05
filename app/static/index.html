@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>課堂搶答系統</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="narrow">
+    <header class="hero">
+      <h1>課堂搶答系統</h1>
+      <p class="muted">Guided Notes 線上搶答・同一個瀏覽器的不同分頁可分別登入不同身分</p>
+    </header>
+
+    <div class="cards">
+      <section class="card" aria-labelledby="t-title">
+        <h2 id="t-title">老師登入</h2>
+        <form id="teacher-form">
+          <label for="passcode">老師通行碼</label>
+          <input id="passcode" type="password" autocomplete="off" inputmode="numeric" placeholder="啟動伺服器時顯示在終端機">
+          <button type="submit" class="primary">進入老師控制台</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="s-title">
+        <h2 id="s-title">學生加入</h2>
+        <form id="student-form">
+          <label for="name">你的名字</label>
+          <input id="name" maxlength="20" autocomplete="off" placeholder="例如：王小明">
+          <label for="group">組別</label>
+          <select id="group"></select>
+          <button type="submit" class="primary">加入搶答</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script>
+    (async () => {
+      if (Auth.token) {
+        try {
+          const me = await api("/api/me");
+          location.href = me.role === "teacher" ? "/teacher" : "/student";
+          return;
+        } catch { Auth.clear(); }
+      }
+      const { groups } = await api("/api/groups");
+      document.getElementById("group").innerHTML =
+        groups.map((g) => `<option value="${g}">第 ${g} 組</option>`).join("");
+    })();
+
+    document.getElementById("teacher-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const { token } = await api("/api/teacher/login", { method: "POST", body: { passcode: document.getElementById("passcode").value } });
+        Auth.save(token);
+        location.href = "/teacher";
+      } catch (err) { toast(err.message, "error"); }
+    });
+
+    document.getElementById("student-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("name").value;
+      if (!name.trim()) return toast("請輸入名字", "error");
+      try {
+        const { token } = await api("/api/student/join", { method: "POST", body: { name, group: Number(document.getElementById("group").value) } });
+        Auth.save(token);
+        location.href = "/student";
+      } catch (err) { toast(err.message, "error"); }
+    });
+  </script>
+</body>
+</html>

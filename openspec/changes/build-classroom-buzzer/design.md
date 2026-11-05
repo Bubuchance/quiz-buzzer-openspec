@@ -26,7 +26,7 @@
 
 ### D2. 即時同步：WebSocket 推送「依角色過濾的完整快照」
 - **選擇**：每個分頁建立一條 WebSocket `/ws?token=...`。任何狀態變更後，伺服器對每條連線重新產生**該身分可見的完整狀態快照**並推送；前端只負責把快照畫出來。
-- **理由**：快照比「增量事件」簡單且不會漏事件；斷線重連後直接拿到最新快照（滿足 live-sync 的恢復需求）。可見性過濾集中在一個函式 `view_for(identity)`，容易測試「學生看不到別組」。
+- **理由**：快照比「增量事件」簡單且不會漏事件；斷線重連後直接拿到最新快照（滿足 live-sync 的恢復需求）。可見性過濾集中在一個函式 `view_for(activity, identity)`（放在 `reporting.py`），容易測試「學生看不到別組」。
 - **替代方案**：前端輪詢 REST（簡單但延遲與負擔較大）；Server-Sent Events（只能單向，送出答案仍需 REST，與目前做法差不多，但 FastAPI 的 WebSocket 測試支援較完整）。
 - 寫入操作（匯入、開關、送出）一律走 REST，WebSocket 只負責推送，讓錯誤訊息能以 HTTP 狀態碼直接回給操作者。
 
@@ -36,7 +36,7 @@
 - 老師通行碼：讀取環境變數 `TEACHER_PASSCODE`；沒有就用 `secrets` 隨機產生 6 位數並印在終端機。比對使用 `secrets.compare_digest`。
 
 ### D4. 搶答狀態：單一 `Activity` 物件 + 一把鎖
-- **選擇**：`activity.py` 內的純 Python 類別保存題目、組數、設定、階段與送出紀錄；所有修改都在 `asyncio.Lock` 內進行。每筆送出記錄遞增序號 `seq` 與 `time.monotonic()` 時間。
+- **選擇**：`activity.py` 內的純 Python 類別保存題目、組數、設定、階段與送出紀錄；所有修改都在 `threading.RLock` 內進行（FastAPI 可能在執行緒池中執行部分工作，用執行緒鎖最保險；且單元測試不需 event loop）。每筆送出記錄遞增序號 `seq` 與 `time.monotonic()` 時間。
 - **理由**：單一程序、記憶體保存即可滿足需求；序號保證同時送達時也有確定的先後；把邏輯與 Web 層分開，單元測試不需啟動伺服器。
 
 ### D5. 搶答成功判定為「純函式」，每次需要時重算
@@ -62,7 +62,7 @@ app/
   activity.py      活動狀態、送出規則、成功判定、角色視圖
   guided_notes.py  佔位符解析、驗證、寫回匯出
   sheets_url.py    Google Sheets 網址下載
-  reporting.py     結果彙整與 CSV
+  reporting.py     結果彙整、角色視圖 view_for、CSV
   static/          index.html、teacher.html、student.html、app.css、common.js、teacher.js、student.js
 samples/make_samples.py  產生範例 Guided Notes（單題、題組＋單題、換位置版本）
 tests/             pytest：guided_notes、activity、reporting、api（含 WebSocket）

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>學生搶答</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="who">學生搶答</h1>
+    <div class="topbar-right">
+      <span id="phase"></span>
+      <span id="live" class="live off">連線中…</span>
+      <button class="ghost" onclick="logout()">離開</button>
+    </div>
+  </header>
+
+  <main class="narrow">
+    <section id="banner" class="banner" aria-live="polite"></section>
+    <section id="questions" class="qcards"></section>
+    <section id="results-card" class="card" hidden>
+      <h2>搶答結果</h2>
+      <div id="results"></div>
+    </section>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/student.js"></script>
+</body>
+</html>

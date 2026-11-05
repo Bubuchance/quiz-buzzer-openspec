@@ -31,7 +31,7 @@
 ## Impact
 
 - 新增 Python 後端（FastAPI + WebSocket）與 HTML/CSS/JavaScript 前端頁面（老師頁、學生頁）。
-- 新增相依套件：`fastapi`、`uvicorn`、`openpyxl`、`python-multipart`；測試使用 `pytest`、`httpx`。
+- 新增相依套件：`fastapi`、`uvicorn`、`websockets`（Uvicorn 的 WebSocket 支援）、`openpyxl`、`python-multipart`；測試使用 `pytest`、`httpx`。
 - 新增 `samples/` 範例 Guided Notes 產生腳本，供測試與 Demo 使用。
 - 不需要任何 Google API 金鑰；老師通行碼由環境變數提供或啟動時隨機產生，不寫進 repo。
 - 只在本機執行（`127.0.0.1`），資料只存在記憶體。
