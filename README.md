@@ -92,6 +92,9 @@ python -m app.main
 - `samples/sample-single.xlsx`：5 題單題
 - `samples/sample-group.xlsx`：3 題單題＋2 個題組
 - `samples/sample-moved.xlsx`：前面多一張封面工作表、標題列在第 4 列、欄位順序為「作答｜題目｜題號」、中間有段落列（測試沒有寫死位置）
+- `samples/teacher-layout-single.xlsx`、`samples/teacher-layout-group.xlsx`：仿老師兩份範本的版面（標題列在第 4 列、題目與作答是合併儲存格、題組的題號上下合併、題目間有分隔列）
+
+已確認老師提供的兩份範本（「軟工期末專案_單題_範例」6 題、「軟工期末專案_題組_範例」4 題，其中第 1、2 題為 2 小題的題組）符合上述格式，可直接用網址匯入（範本需設為「知道連結的人皆可檢視」）或下載 xlsx 上傳。
 
 ## 與 Google Sheets 搭配
 
@@ -135,7 +138,7 @@ python -m app.main
 python -m pytest
 ```
 
-共 74 個自動化測試，涵蓋 spec 中的情境：欄位標題解析與驗證、寫回匯出、Google Sheets 網址、階段規則、送出規則、一般／公平模式判定、倒數計時、標記對錯與計分板、作答進度、角色可見性、CSV、REST API 權限與 WebSocket 同步。人工驗證清單見 [docs/04-人工驗證清單.md](docs/04-人工驗證清單.md)。
+共 76 個自動化測試，涵蓋 spec 中的情境：欄位標題解析與驗證、寫回匯出、Google Sheets 網址、階段規則、送出規則、一般／公平模式判定、倒數計時、標記對錯與計分板、作答進度、角色可見性、CSV、REST API 權限與 WebSocket 同步。人工驗證清單見 [docs/04-人工驗證清單.md](docs/04-人工驗證清單.md)。
 
 ## 專案結構
 

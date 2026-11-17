@@ -184,9 +184,30 @@ def test_download_network_error():
 # --- 1.4 範例檔 ---
 
 def test_samples_import_with_expected_counts():
-    expected = {"sample-single.xlsx": (5, []), "sample-group.xlsx": (5, [3, 5]), "sample-moved.xlsx": (3, [2])}
+    expected = {"sample-single.xlsx": (5, []), "sample-group.xlsx": (5, [3, 5]), "sample-moved.xlsx": (3, [2]),
+                "teacher-layout-single.xlsx": (6, []), "teacher-layout-group.xlsx": (4, [1, 2])}
     for name, build in SAMPLES.items():
         qs = parse_guided_notes(build())
         count, groups = expected[name]
         assert len(qs) == count, name
         assert [q.number for q in qs if q.is_group] == groups, name
+
+
+# --- 老師範本版面（合併儲存格、分隔列、題號上下合併） ---
+
+def test_teacher_single_layout_locations():
+    qs = parse_guided_notes(SAMPLES["teacher-layout-single.xlsx"]())
+    assert [q.locations for q in qs[:3]] == [["學習單!G5"], ["學習單!G7"], ["學習單!G9"]]
+
+
+def test_teacher_group_layout_and_export_into_merged_cells():
+    data = SAMPLES["teacher-layout-group.xlsx"]()
+    qs = parse_guided_notes(data)
+    assert [(q.number, q.sub_count, q.locations) for q in qs] == [
+        (1, 2, ["學習單!G5", "學習單!G6"]), (2, 2, ["學習單!G8", "學習單!G9"]),
+        (3, 0, ["學習單!G11"]), (4, 0, ["學習單!G13"]),
+    ]
+    result = fill_answers(data, {(1, 1): "CPU", (1, 2): "作業系統", (3, None): "0"})
+    ws = load_workbook(BytesIO(result))["學習單"]
+    assert (ws["G5"].value, ws["G6"].value, ws["G8"].value, ws["G11"].value, ws["G13"].value) == ("CPU", "作業系統", "（1）", "0", None)
+    assert "G11:H11" in {str(m) for m in ws.merged_cells.ranges}  # 合併儲存格保持不變

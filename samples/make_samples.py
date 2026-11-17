@@ -5,6 +5,7 @@
 - samples/sample-single.xlsx：5 題單題
 - samples/sample-group.xlsx：單題與題組混合
 - samples/sample-moved.xlsx：前面多一張封面工作表、標題列在第 4 列、欄位順序不同（驗證沒有寫死位置）
+- samples/teacher-layout-single.xlsx、teacher-layout-group.xlsx：仿老師兩份範本的版面（含合併儲存格與分隔列）
 這些檔案也可以上傳到 Google Sheets（檔案 → 匯入）後，用網址匯入測試。
 """
 from __future__ import annotations
@@ -94,10 +95,63 @@ def moved_workbook() -> bytes:
     return _save(wb)
 
 
+def _teacher_layout(ws, rows) -> None:
+    """仿老師範本的版面：第 2 列標題（B:H 合併）、第 4 列欄位標題，
+    題目 C:F 合併、單題作答 G:H 合併；題組的題號上下合併、各列作答欄寫（k）；題目之間有空白分隔列。"""
+    ws.merge_cells("B2:H2")
+    ws["B2"] = "計算機概論基礎 學習單"
+    ws["B4"], ws["C4"], ws["G4"] = "題號", "題目", "作答"
+    ws.merge_cells("C4:F4")
+    ws.merge_cells("G4:H4")
+    r = 5
+    for number, parts in rows:
+        if len(parts) == 1:  # 單題
+            ws.cell(row=r, column=2, value=number)
+            ws.cell(row=r, column=3, value=parts[0])
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=6)
+            ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=8)
+            r += 1
+        else:  # 題組：題號上下合併
+            ws.cell(row=r, column=2, value=number)
+            ws.merge_cells(start_row=r, start_column=2, end_row=r + len(parts) - 1, end_column=2)
+            for k, text in enumerate(parts, start=1):
+                ws.cell(row=r, column=3, value=text)
+                ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=6)
+                ws.cell(row=r, column=7, value=f"（{k}）")
+                r += 1
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=8)  # 分隔列
+        r += 1
+
+
+def teacher_single_workbook() -> bytes:
+    """與老師「單題範例」相同的版面（題目文字為示意）。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "學習單"
+    _teacher_layout(ws, [(n, [f"第 {n} 題題目（示意）"]) for n in range(1, 7)])
+    return _save(wb)
+
+
+def teacher_group_workbook() -> bytes:
+    """與老師「題組範例」相同的版面：第 1、2 題為 2 小題的題組，第 3、4 題為單題。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "學習單"
+    _teacher_layout(ws, [
+        (1, ["第 1 題第一部分（示意）", "第 1 題第二部分（示意）"]),
+        (2, ["第 2 題第一部分（示意）", "第 2 題第二部分（示意）"]),
+        (3, ["第 3 題題目（示意）"]),
+        (4, ["第 4 題題目（示意）"]),
+    ])
+    return _save(wb)
+
+
 SAMPLES = {
     "sample-single.xlsx": single_workbook,
     "sample-group.xlsx": group_workbook,
     "sample-moved.xlsx": moved_workbook,
+    "teacher-layout-single.xlsx": teacher_single_workbook,
+    "teacher-layout-group.xlsx": teacher_group_workbook,
 }
 
 
