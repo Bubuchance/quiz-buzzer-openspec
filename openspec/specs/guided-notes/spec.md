@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定義 Guided Notes 的填空佔位符規範，以及如何從 Guided Notes 動態匯入題號、並把搶答成功的答案寫回原本填空格，讓任何遵守規範的 Guided Notes 都能使用。
+定義 Guided Notes 的欄位標題（題號、作答）與題組（1）（2）標示規範，以及如何依標題動態匯入題號、並把搶答成功的答案寫回原本作答格，讓任何遵守規範的學習單都能使用（與 SpecKit 組一致）。
 
 ## Requirements
 
