@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import secrets
 from pathlib import Path
@@ -41,7 +42,13 @@ class UrlBody(BaseModel):
 class SettingsBody(BaseModel):
     group_count: int | None = None
     fair_mode: bool | None = None
-    fair_window: int | None = None
+    fair_delay: int | None = None
+    time_limit: int | None = None
+
+
+class MarkBody(BaseModel):
+    number: int
+    mark: str | None = None  # "correct"、"wrong" 或 null（取消標記）
 
 
 class SubmitBody(BaseModel):
@@ -76,6 +83,7 @@ def generate_passcode() -> str:
 def create_app(passcode: str | None = None, fetch: Callable[[str], bytes] | None = None) -> FastAPI:
     activity = Activity(teacher_passcode=passcode or os.environ.get("TEACHER_PASSCODE") or generate_passcode())
     hub = Hub(activity)
+    timers: set[asyncio.Task] = set()  # 保留倒數工作的參照，避免被回收
     app = FastAPI(title="課堂搶答系統")
     app.state.activity = activity
     app.state.hub = hub
@@ -176,13 +184,31 @@ def create_app(passcode: str | None = None, fetch: Callable[[str], bytes] | None
 
     @app.post("/api/teacher/settings")
     async def settings(body: SettingsBody, _t: Identity = Depends(require_teacher)):
-        activity.update_settings(body.group_count, body.fair_mode, body.fair_window)
+        activity.update_settings(body.group_count, body.fair_mode, body.fair_delay, body.time_limit)
         await hub.broadcast()
         return ok()
 
     @app.post("/api/teacher/open")
     async def open_buzzer(_t: Identity = Depends(require_teacher)):
-        activity.open()
+        round_id = activity.open()
+        if activity.time_limit:
+            # 倒數計時：時間到由伺服器自動結束；回合不同（已手動結束或重設）就不做事
+            task = asyncio.create_task(expire_later(round_id, activity.time_limit))
+            timers.add(task)
+            task.add_done_callback(timers.discard)
+        await hub.broadcast()
+        return ok()
+
+    async def expire_later(round_id: int, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        while activity.remaining_seconds():  # 時鐘誤差保險：還沒到就再等一下
+            await asyncio.sleep(activity.remaining_seconds())
+        if activity.expire(round_id):
+            await hub.broadcast()
+
+    @app.post("/api/teacher/mark")
+    async def mark(body: MarkBody, _t: Identity = Depends(require_teacher)):
+        activity.mark(body.number, body.mark)
         await hub.broadcast()
         return ok()
 
@@ -228,7 +254,13 @@ def create_app(passcode: str | None = None, fetch: Callable[[str], bytes] | None
 
     @app.post("/api/student/submit")
     async def submit(body: SubmitBody, student: Identity = Depends(require_student)):
-        activity.submit(student, body.number, body.answers)
+        before = activity.version
+        try:
+            activity.submit(student, body.number, body.answers)
+        except ActivityError:
+            if activity.version != before:  # 送出時剛好時間到而自動結束，也要同步所有畫面
+                await hub.broadcast()
+            raise
         await hub.broadcast()
         return ok()
 

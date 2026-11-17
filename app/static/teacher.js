@@ -48,7 +48,8 @@ $("settings-form").onsubmit = (e) => {
     body: {
       group_count: Number($("group-count").value),
       fair_mode: $("fair-mode").checked,
-      fair_window: Number($("fair-window").value),
+      fair_delay: Number($("fair-delay").value),
+      time_limit: Number($("time-limit").value),
     },
   }), "設定已儲存");
 };
@@ -75,7 +76,8 @@ function render(state) {
   // 使用者正在編輯的設定欄位不覆蓋
   const active = document.activeElement;
   if (active !== $("group-count")) $("group-count").value = state.group_count;
-  if (active !== $("fair-window")) $("fair-window").value = state.fair_window;
+  if (active !== $("fair-delay")) $("fair-delay").value = state.fair_delay;
+  if (active !== $("time-limit")) $("time-limit").value = state.time_limit;
   if (active !== $("fair-mode")) $("fair-mode").checked = state.fair_mode;
 
   $("questions").innerHTML = state.questions.length
@@ -90,11 +92,22 @@ function render(state) {
       ? names.map(escapeHtml).join("、") : '<span class="muted">尚無成員</span>'}</li>`;
   }).join("");
 
-  $("provisional").textContent = p === "open" ? "（搶答中，結果為暫定）" : "";
-  $("results").innerHTML = state.questions.length ? renderResults(state) : `<p class="muted">尚無資料</p>`;
+  $("provisional").textContent = p === "open" ? "（搶答中，結果為暫定）"
+    : p === "closed" ? "（可標記成功答案的對錯，計分板會即時更新）" : "";
+  $("results").innerHTML = state.questions.length
+    ? renderResults(state, { editable: p === "closed" }) : `<p class="muted">尚無資料</p>`;
+  showCountdown($("countdown"), state);
 }
 
 connectLive(render, (online) => {
   $("live").textContent = online ? "即時連線" : "重新連線中…";
   $("live").className = `live ${online ? "on" : "off"}`;
+});
+
+// 標記對錯（事件委派：結果表每次重畫，按鈕都會重新產生）
+$("results").addEventListener("click", (e) => {
+  const btn = e.target.closest(".mark-btn");
+  if (!btn) return;
+  const mark = btn.dataset.mark || null;
+  run(() => api("/api/teacher/mark", { method: "POST", body: { number: Number(btn.dataset.number), mark } }));
 });

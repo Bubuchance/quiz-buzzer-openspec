@@ -1,4 +1,4 @@
-"""搶答活動的狀態、規則與角色視圖。
+"""搶答活動的狀態、規則與判定。
 
 這個模組不碰網路，所有規則都能用單元測試直接驗證。
 整個服務只有一場活動；所有修改都在同一把鎖內完成，確保同時送出時有確定的先後。
@@ -15,21 +15,23 @@ from typing import Callable
 from app.guided_notes import BlankKey, Question, parse_guided_notes
 
 MIN_GROUPS, MAX_GROUPS, DEFAULT_GROUPS = 1, 20, 4
-MIN_WINDOW, MAX_WINDOW, DEFAULT_WINDOW = 1, 30, 3
+MIN_DELAY, MAX_DELAY, DEFAULT_DELAY = 1, 30, 3
+MIN_TIME_LIMIT, MAX_TIME_LIMIT = 0, 3600
 MAX_NAME_LENGTH = 20
 MAX_ANSWER_LENGTH = 500
+MARKS = ("correct", "wrong")
 
 
 class Phase(str, Enum):
-    NO_QUESTIONS = "no_questions"
+    NO_QUESTIONS = "no_questions"  # 對外也顯示「準備中」
     READY = "ready"
     OPEN = "open"
     CLOSED = "closed"
 
 
 PHASE_LABELS = {
-    Phase.NO_QUESTIONS: "未匯入",
-    Phase.READY: "等待開始",
+    Phase.NO_QUESTIONS: "準備中",
+    Phase.READY: "準備中",
     Phase.OPEN: "搶答中",
     Phase.CLOSED: "已結束",
 }
@@ -59,8 +61,10 @@ class Submission:
     answers: list[str]
     student: str
     seq: int
-    at: float  # 伺服器 monotonic 時間
+    at: float  # 伺服器 monotonic 時間（判定先後用）
+    wall: float  # 牆上時間（CSV 顯示用）
     elapsed: float  # 距離開啟搶答的秒數
+    prior_wins: int = 0  # 收到當下該組已搶答成功題數（公平模式用）
 
 
 def group_name(group: int) -> str:
@@ -71,17 +75,22 @@ def group_name(group: int) -> str:
 class Activity:
     teacher_passcode: str
     clock: Callable[[], float] = time.monotonic
+    wall_clock: Callable[[], float] = time.time
     questions: list[Question] = field(default_factory=list)
     source_bytes: bytes | None = None
     source_name: str = ""
     group_count: int = DEFAULT_GROUPS
     fair_mode: bool = False
-    fair_window: int = DEFAULT_WINDOW
+    fair_delay: int = DEFAULT_DELAY
+    time_limit: int = 0  # 秒；0 = 不限時
     phase: Phase = Phase.NO_QUESTIONS
     submissions: dict[int, list[Submission]] = field(default_factory=dict)
+    marks: dict[int, str] = field(default_factory=dict)
     opened_at: float | None = None
+    deadline: float | None = None
+    round_id: int = 0
     identities: dict[str, Identity] = field(default_factory=dict)
-    version: int = 0  # 每次狀態改變 +1，方便前端與測試判斷是否有更新
+    version: int = 0  # 每次狀態改變 +1
     _seq: int = 0
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
@@ -124,28 +133,36 @@ class Activity:
             self.questions = questions
             self.source_bytes = data
             self.source_name = source_name or "guided-notes.xlsx"
-            self._clear_submissions()
+            self._clear_round()
             self.phase = Phase.READY
             self._touch()
 
     def update_settings(self, group_count: int | None = None, fair_mode: bool | None = None,
-                        fair_window: int | None = None) -> None:
+                        fair_delay: int | None = None, time_limit: int | None = None) -> None:
+        def in_range(value, low, high):
+            return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
         with self._lock:
             if self.phase == Phase.OPEN:
                 raise ActivityError("搶答進行中不能修改設定，請先結束搶答", 409)
-            if group_count is not None and not (isinstance(group_count, int) and MIN_GROUPS <= group_count <= MAX_GROUPS):
+            if group_count is not None and not in_range(group_count, MIN_GROUPS, MAX_GROUPS):
                 raise ActivityError(f"組數需介於 {MIN_GROUPS} 到 {MAX_GROUPS}")
-            if fair_window is not None and not (isinstance(fair_window, int) and MIN_WINDOW <= fair_window <= MAX_WINDOW):
-                raise ActivityError(f"時間窗需介於 {MIN_WINDOW} 到 {MAX_WINDOW} 秒")
+            if fair_delay is not None and not in_range(fair_delay, MIN_DELAY, MAX_DELAY):
+                raise ActivityError(f"延遲量需介於 {MIN_DELAY} 到 {MAX_DELAY} 秒")
+            if time_limit is not None and not in_range(time_limit, MIN_TIME_LIMIT, MAX_TIME_LIMIT):
+                raise ActivityError(f"時限需介於 {MIN_TIME_LIMIT} 到 {MAX_TIME_LIMIT} 秒（0 表示不限時）")
             if group_count is not None:
                 self.group_count = group_count
             if fair_mode is not None:
                 self.fair_mode = bool(fair_mode)
-            if fair_window is not None:
-                self.fair_window = fair_window
+            if fair_delay is not None:
+                self.fair_delay = fair_delay
+            if time_limit is not None:
+                self.time_limit = time_limit
             self._touch()
 
-    def open(self) -> None:
+    def open(self) -> int:
+        """開啟搶答，回傳本回合編號（倒數計時用）。"""
         with self._lock:
             if self.phase == Phase.NO_QUESTIONS:
                 raise ActivityError("請先匯入 Guided Notes 題目", 409)
@@ -155,14 +172,41 @@ class Activity:
                 raise ActivityError("本輪已結束，請先按「重設」再開始新一輪", 409)
             self.phase = Phase.OPEN
             self.opened_at = self.clock()
+            self.deadline = self.opened_at + self.time_limit if self.time_limit else None
+            self.round_id += 1
             self._touch()
+            return self.round_id
 
     def close(self) -> None:
         with self._lock:
             if self.phase != Phase.OPEN:
                 raise ActivityError("目前沒有進行中的搶答", 409)
             self.phase = Phase.CLOSED
+            self.deadline = None
             self._touch()
+
+    def expire(self, round_id: int) -> bool:
+        """倒數時間到時呼叫；只有同一回合且仍在搶答中才結束。回傳是否有結束。"""
+        with self._lock:
+            if self.phase != Phase.OPEN or self.round_id != round_id:
+                return False
+            self.phase = Phase.CLOSED
+            self.deadline = None
+            self._touch()
+            return True
+
+    def expire_if_due(self) -> bool:
+        """若已超過時限就自動結束；回傳是否剛結束。"""
+        with self._lock:
+            if self.phase == Phase.OPEN and self.deadline is not None and self.clock() >= self.deadline:
+                return self.expire(self.round_id)
+            return False
+
+    def remaining_seconds(self) -> float | None:
+        with self._lock:
+            if self.phase != Phase.OPEN or self.deadline is None:
+                return None
+            return max(0.0, round(self.deadline - self.clock(), 3))
 
     def reset(self) -> None:
         with self._lock:
@@ -170,14 +214,32 @@ class Activity:
                 raise ActivityError("搶答進行中不能重設，請先結束搶答", 409)
             if self.phase == Phase.NO_QUESTIONS:
                 raise ActivityError("尚未匯入題目", 409)
-            self._clear_submissions()
+            self._clear_round()
             self.phase = Phase.READY
+            self._touch()
+
+    def mark(self, number: int, mark: str | None) -> None:
+        with self._lock:
+            if self.phase != Phase.CLOSED:
+                raise ActivityError("搶答結束後才能標記對錯", 409)
+            if self.question(number) is None:
+                raise ActivityError("題號不存在", 404)
+            if mark is not None and mark not in MARKS:
+                raise ActivityError("標記只能是「對」或「錯」")
+            if number not in self.winners():
+                raise ActivityError("此題無人搶答，不能標記", 409)
+            if mark is None:
+                self.marks.pop(number, None)
+            else:
+                self.marks[number] = mark
             self._touch()
 
     # ---------- 學生操作 ----------
 
     def submit(self, identity: Identity, number: int, answers: list[str]) -> Submission:
         with self._lock:
+            if self.expire_if_due():
+                raise ActivityError("搶答時間已到", 409)
             if self.phase != Phase.OPEN:
                 raise ActivityError("目前不在搶答中", 409)
             if identity.group is None or not MIN_GROUPS <= identity.group <= self.group_count:
@@ -196,10 +258,13 @@ class Activity:
             existing = self.submissions.setdefault(number, [])
             if any(s.group == identity.group for s in existing):
                 raise ActivityError("本組已送出此題", 409)
+            # 收到當下依公平規則算出的暫定成功題數，之後不再改變
+            current = rank_submissions(self.submissions, True, self.fair_delay)
+            prior_wins = sum(1 for subs in current.values() if subs and subs[0].group == identity.group)
             now = self.clock()
             self._seq += 1
             submission = Submission(identity.group, number, cleaned, identity.name, self._seq, now,
-                                    round(now - (self.opened_at or now), 3))
+                                    self.wall_clock(), round(now - (self.opened_at or now), 3), prior_wins)
             existing.append(submission)
             self._touch()
             return submission
@@ -209,10 +274,16 @@ class Activity:
     def question(self, number: int) -> Question | None:
         return next((q for q in self.questions if q.number == number), None)
 
-    def winners(self) -> dict[int, Submission]:
-        """回傳每題的搶答成功送出。純計算，每次依送出紀錄重算。"""
+    def ranked(self) -> dict[int, list[Submission]]:
+        """每題依順位排序的送出。"""
         with self._lock:
-            return compute_winners(self.submissions, self.fair_mode, self.fair_window)
+            return rank_submissions(self.submissions, self.fair_mode, self.fair_delay)
+
+    def winners(self) -> dict[int, Submission]:
+        return {n: subs[0] for n, subs in self.ranked().items() if subs}
+
+    def effective_time(self, s: Submission) -> float:
+        return effective_time(s, self.fair_mode, self.fair_delay)
 
     def export_answers(self) -> dict[BlankKey, str]:
         answers: dict[BlankKey, str] = {}
@@ -233,33 +304,26 @@ class Activity:
 
     # ---------- 內部 ----------
 
-    def _clear_submissions(self) -> None:
+    def _clear_round(self) -> None:
         self.submissions = {}
+        self.marks = {}
         self.opened_at = None
+        self.deadline = None
         self._seq = 0
 
     def _touch(self) -> None:
         self.version += 1
 
 
-def compute_winners(submissions: dict[int, list[Submission]], fair_mode: bool,
-                    fair_window: float) -> dict[int, Submission]:
-    """一般模式：每題最早送出者成功。
+def effective_time(s: Submission, fair_mode: bool, delay: float) -> float:
+    """有效時間 = 收到時間 + 收到當下已成功題數 × 延遲量（公平模式）；否則就是收到時間。"""
+    return s.at + s.prior_wins * delay if fair_mode else s.at
 
-    公平模式：各題依「第一份答案送達時間」先後處理；第一份送達後 fair_window 秒內
-    送達的組別為候選，候選中目前成功題數最少者成功，同數取較早送出者。
-    """
-    ordered = {n: sorted(subs, key=lambda s: s.seq) for n, subs in submissions.items() if subs}
-    if not fair_mode:
-        return {n: subs[0] for n, subs in ordered.items()}
 
-    wins: dict[int, int] = {}
-    result: dict[int, Submission] = {}
-    for number in sorted(ordered, key=lambda n: ordered[n][0].seq):
-        subs = ordered[number]
-        deadline = subs[0].at + fair_window
-        candidates = [s for s in subs if s.at <= deadline]
-        winner = min(candidates, key=lambda s: (wins.get(s.group, 0), s.seq))
-        wins[winner.group] = wins.get(winner.group, 0) + 1
-        result[number] = winner
-    return result
+def rank_submissions(submissions: dict[int, list[Submission]], fair_mode: bool,
+                     delay: float) -> dict[int, list[Submission]]:
+    """每題依（有效時間, 收到序號）排序；第一名即搶答成功。"""
+    return {
+        n: sorted(subs, key=lambda s: (effective_time(s, fair_mode, delay), s.seq))
+        for n, subs in submissions.items() if subs
+    }
