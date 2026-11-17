@@ -106,8 +106,19 @@ form.row > button { margin-top: 0; }
 .ranks .who { font-weight: 600; margin-right: .5rem; }
 .ranks .meta { color: var(--muted); font-size: .8rem; margin-left: .5rem; }
 .scoreboard { background: #fafbfc; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
-.scoreboard ol { margin: 0; padding-left: 1.3rem; }
-.scoreboard li span { margin-right: .5rem; }
+.scoreboard table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.scoreboard th, .scoreboard td { text-align: left; padding: .25rem .2rem; border-bottom: 1px solid var(--line); }
+.scoreboard p { margin: .5rem 0 0; }
+.mark { display: inline-block; padding: 0 .5rem; border-radius: 999px; font-size: .8rem; font-weight: 700; margin-left: .3rem; }
+.mark-correct { background: var(--win-bg); color: var(--ok); }
+.mark-wrong { background: #ffe1de; color: var(--danger); }
+.mark-buttons { display: inline-flex; gap: 4px; margin-left: .4rem; vertical-align: middle; }
+.mark-btn { padding: .1rem .55rem; font-size: .82rem; }
+.mark-btn.on.correct { background: var(--ok); color: #fff; border-color: var(--ok); }
+.mark-btn.on.wrong { background: var(--danger); color: #fff; border-color: var(--danger); }
+.countdown { font-variant-numeric: tabular-nums; font-weight: 700; padding: .2rem .6rem; border-radius: 8px; background: #eef1f5; }
+.countdown.urgent { background: #ffe1de; color: var(--danger); }
+.progress { margin: -6px 0 16px; font-size: .95rem; }
 
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none;
   background: #1d2330; color: #fff; padding: .7rem 1.1rem; border-radius: 10px; transition: all .2s; max-width: calc(100% - 32px); z-index: 10; }

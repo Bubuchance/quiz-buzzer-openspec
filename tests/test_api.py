@@ -110,22 +110,25 @@ def test_full_flow_with_exports(client):
     r = client.get(f"/api/teacher/export/guided-notes?token={t}")
     assert r.status_code == 200 and "filename*=UTF-8''" in r.headers["content-disposition"]
     ws = load_workbook(BytesIO(r.content)).active
-    values = [c.value for row in ws.iter_rows() for c in row if c.value]
-    assert "描述物件之間訊息傳遞先後順序的圖是 循序圖。" in values
-    assert "題組：類別圖中，空心菱形代表 聚合，實心菱形代表 組合。" in values
-    assert "描述系統由哪些元件組成的圖是 {{2}}。" in values
+    assert [ws[f"C{r}"].value for r in range(3, 8)] == ["循序圖", None, "聚合", "組合", None]
+    assert ws["B3"].value == "描述物件之間訊息傳遞先後順序的圖是 ____。"
 
     r = client.get("/api/teacher/export/csv", headers=auth(t))
     rows = list(csv.reader(StringIO(r.content.decode("utf-8-sig"))))
-    assert rows[0][0] == "題號" and len(rows) == 1 + 2 + 2
+    assert rows[0] == ["題號", "組別", "答案", "搶答順位", "是否搶答成功", "送出時間"] and len(rows) == 1 + 3
+    assert rows[3][:5] == ["3", "第 1 組", "（1）聚合（2）組合", "1", "是"]
 
 
 def test_settings_api(client):
     t = teacher(client)
     assert client.post("/api/teacher/settings", headers=auth(t), json={"group_count": 6}).status_code == 200
     assert client.get("/api/groups").json()["groups"][-1] == 6
-    r = client.post("/api/teacher/settings", headers=auth(t), json={"fair_window": 31})
+    r = client.post("/api/teacher/settings", headers=auth(t), json={"fair_delay": 31})
     assert r.status_code == 400
+    assert client.post("/api/teacher/settings", headers=auth(t), json={"time_limit": 3601}).status_code == 400
+    r = client.post("/api/teacher/settings", headers=auth(t), json={"fair_mode": True, "fair_delay": 5, "time_limit": 90})
+    state = client.get("/api/state", headers=auth(t)).json()
+    assert (state["fair_mode"], state["fair_delay"], state["time_limit"]) == (True, 5, 90)
 
 
 def test_export_before_import(client):
@@ -202,3 +205,46 @@ def test_teacher_receives_new_submission_live(client):
         q1 = wt.receive_json()["state"]["results"]["questions"][0]
         assert q1["submissions"][0]["group"] == 3 and q1["submissions"][0]["rank"] == 1
         assert q1["winner"]["group"] == 3
+
+
+def test_mark_api_and_permissions(client):
+    t = teacher(client)
+    upload(client, t, single_workbook())
+    s1 = student(client, 1)
+    client.post("/api/teacher/open", headers=auth(t))
+    client.post("/api/student/submit", headers=auth(s1), json={"number": 1, "answers": ["實作"]})
+    r = client.post("/api/teacher/mark", headers=auth(t), json={"number": 1, "mark": "correct"})
+    assert r.status_code == 409 and "結束後" in r.json()["detail"]
+    client.post("/api/teacher/close", headers=auth(t))
+    assert client.post("/api/teacher/mark", headers=auth(s1), json={"number": 1, "mark": "correct"}).status_code == 403
+    assert client.post("/api/teacher/mark", headers=auth(t), json={"number": 1, "mark": "correct"}).status_code == 200
+    state = client.get("/api/state", headers=auth(s1)).json()
+    assert state["results"]["questions"][0]["mark"] == "correct"
+    assert state["results"]["scoreboard"][0] == {"group": 1, "group_name": "第 1 組", "score": 1, "wins": 1}
+    assert client.post("/api/teacher/mark", headers=auth(t), json={"number": 2, "mark": "correct"}).status_code == 409
+
+
+def test_student_progress_in_state(client):
+    t = teacher(client)
+    upload(client, t, single_workbook())
+    s1, s2 = student(client, 1), student(client, 2)
+    client.post("/api/teacher/open", headers=auth(t))
+    client.post("/api/student/submit", headers=auth(s2), json={"number": 2, "answers": ["x"]})
+    client.post("/api/student/submit", headers=auth(s1), json={"number": 1, "answers": ["y"]})
+    assert client.get("/api/state", headers=auth(s1)).json()["progress"] == {"submitted": 1, "total": 5}
+
+
+def test_countdown_auto_close_broadcasts(client):
+    t = teacher(client)
+    upload(client, t, single_workbook())
+    s1 = student(client, 1)
+    client.post("/api/teacher/settings", headers=auth(t), json={"time_limit": 1})
+    with client.websocket_connect(f"/ws?token={s1}") as w:
+        w.receive_json()
+        client.post("/api/teacher/open", headers=auth(t))
+        opened = w.receive_json()["state"]
+        assert opened["phase"] == "open" and 0 < opened["remaining_seconds"] <= 1
+        closed = w.receive_json()["state"]  # 約 1 秒後伺服器自動結束並推送
+        assert closed["phase"] == "closed" and closed["remaining_seconds"] is None
+    r = client.post("/api/student/submit", headers=auth(s1), json={"number": 1, "answers": ["late"]})
+    assert r.status_code == 409

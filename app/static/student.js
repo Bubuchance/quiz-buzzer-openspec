@@ -5,8 +5,8 @@ const $ = (id) => document.getElementById(id);
 const drafts = {}; // key: "題號-小題索引" -> 文字
 
 const BANNERS = {
-  no_questions: "等待老師匯入題目…",
-  ready: "題目已就緒，等待老師開啟搶答…",
+  no_questions: "準備中：等待老師匯入題目…",
+  ready: "準備中：題目已就緒，等待老師開啟搶答…",
   open: "搶答開始！填好答案就按「送出」，每題本組只能送出一次。",
   closed: "搶答已結束，請看下方結果。",
 };
@@ -43,6 +43,11 @@ function render(state) {
   $("phase").innerHTML = phaseBadge(state);
   $("banner").className = `banner banner-${state.phase}`;
   $("banner").textContent = state.group_valid ? BANNERS[state.phase] : "你的組別已不存在，請按「離開」後重新加入。";
+
+  const progress = state.progress;
+  $("progress").hidden = !(state.phase === "open" && progress.total);
+  $("progress").innerHTML = `本組已送出 <strong>${progress.submitted}</strong> / ${progress.total} 題`;
+  showCountdown($("countdown"), state);
 
   const focused = document.activeElement?.id;
   $("questions").innerHTML = state.phase === "closed" ? "" : state.questions.map((q) => questionCard(q, state)).join("");

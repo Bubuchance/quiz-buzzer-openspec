@@ -10,6 +10,7 @@
   <header class="topbar">
     <h1 id="who">學生搶答</h1>
     <div class="topbar-right">
+      <span id="countdown" class="countdown" hidden aria-live="polite"></span>
       <span id="phase"></span>
       <span id="live" class="live off">連線中…</span>
       <button class="ghost" onclick="logout()">離開</button>
@@ -18,6 +19,7 @@
 
   <main class="narrow">
     <section id="banner" class="banner" aria-live="polite"></section>
+    <p id="progress" class="progress" hidden></p>
     <section id="questions" class="qcards"></section>
     <section id="results-card" class="card" hidden>
       <h2>搶答結果</h2>

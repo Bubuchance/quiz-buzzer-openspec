@@ -10,6 +10,7 @@
   <header class="topbar">
     <h1>老師控制台</h1>
     <div class="topbar-right">
+      <span id="countdown" class="countdown" hidden aria-live="polite"></span>
       <span id="phase"></span>
       <span id="live" class="live off" title="即時連線狀態">連線中…</span>
       <button class="ghost" onclick="logout()">登出</button>
@@ -29,7 +30,7 @@
     <div class="grid">
       <section class="card">
         <h2>1. 匯入 Guided Notes</h2>
-        <p class="muted small">填空格請放佔位符：單題 <code>{{1}}</code>、題組 <code>{{3-1}}</code> <code>{{3-2}}</code>。</p>
+        <p class="muted small">學習單需有「題號」「作答」欄位標題；題組在作答欄寫（1）（2）…，後續小題放在下方列、題號欄留空。</p>
         <form id="file-form" class="row">
           <input id="file" type="file" accept=".xlsx" aria-label="選擇 xlsx 檔案">
           <button type="submit">上傳 .xlsx</button>
@@ -46,9 +47,11 @@
         <form id="settings-form">
           <label for="group-count">組數（1–20）</label>
           <input id="group-count" type="number" min="1" max="20">
-          <label class="check"><input id="fair-mode" type="checkbox"> 公平模式：時間窗內成功題數較少的組別優先</label>
-          <label for="fair-window">時間窗（秒，1–30）</label>
-          <input id="fair-window" type="number" min="1" max="30">
+          <label class="check"><input id="fair-mode" type="checkbox"> 公平模式：已成功越多題的組別，有效時間加上延遲</label>
+          <label for="fair-delay">延遲量（每成功一題加幾秒，1–30）</label>
+          <input id="fair-delay" type="number" min="1" max="30">
+          <label for="time-limit">搶答時限（秒，0 = 不限時，最多 3600）</label>
+          <input id="time-limit" type="number" min="0" max="3600">
           <button type="submit">儲存設定</button>
         </form>
         <h3>各組成員</h3>
