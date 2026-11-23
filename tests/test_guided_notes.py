@@ -1,12 +1,16 @@
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font
+from openpyxl import Workbook
 
-from app.guided_notes import GuidedNotesError, fill_answers, parse_guided_notes
-from app.sheets_url import SheetsUrlError, download_xlsx, spreadsheet_id
-from samples.make_samples import SAMPLES, group_workbook
+from app.guided_notes import (GuidedNotesError, SheetGrid, Spreadsheet, build_writes, column_letter,
+                              parse_spreadsheet, spreadsheet_from_xlsx)
+from samples.make_samples import SAMPLES
+
+
+def parse_guided_notes(data: bytes):
+    """測試輔助：xlsx → 與 Google Sheets API 相同的值格線 → 解析。"""
+    return parse_spreadsheet(spreadsheet_from_xlsx(data)).questions
 
 
 def make_xlsx(rows, start_row=1, cols=("題號", "題目", "作答"), extra_first_sheet=False) -> bytes:
@@ -103,82 +107,51 @@ def test_no_header():
         parse_guided_notes(out.getvalue())
 
 
-def test_not_an_xlsx():
-    with pytest.raises(GuidedNotesError, match="不是有效的 .xlsx"):
-        parse_guided_notes(b"hello world")
+# --- 1.3 寫回內容（build_writes） ---
+
+def grid(rows, title="S"):
+    return Spreadsheet("t", [SheetGrid(title, rows)])
 
 
-# --- 1.3 寫回 ---
-
-def test_fill_answers_singles_groups_and_blanks():
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "S"
-    ws.append(["標題"])
-    ws.append(["題號", "題目", "作答"])
-    ws.append([1, "牛頓第一定律又稱為 ____ 定律", None])
-    ws.append([2, "題組", "（1）____"])
-    ws.append([None, "", "（2）"])
-    ws.append([3, "沒人答", None])
-    ws.append([4, "沒人答的題組", "（1）"])
-    ws["B3"].font = Font(bold=True, color="FF0000")
-    out = BytesIO()
-    wb.save(out)
-
-    result = fill_answers(out.getvalue(), {(1, None): "慣性", (2, 1): "A", (2, 2): "=B"})
-    filled = load_workbook(BytesIO(result))["S"]
-    assert filled["C3"].value == "慣性"
-    assert filled["C4"].value == "A"
-    assert filled["C5"].value == "=B" and filled["C5"].data_type == "s"
-    assert filled["C6"].value is None
-    assert filled["C7"].value == "（1）"
-    assert filled["B3"].value == "牛頓第一定律又稱為 ____ 定律" and filled["B3"].font.bold
-    assert filled["A1"].value == "標題"
+def test_column_letter():
+    assert [column_letter(c) for c in (1, 7, 26, 27, 52)] == ["A", "G", "Z", "AA", "AZ"]
 
 
-def test_fill_answers_on_moved_sample():
-    data = SAMPLES["sample-moved.xlsx"]()
-    result = fill_answers(data, {(1, None): "80", (2, 1): "SYN", (2, 2): "SYN-ACK", (3, None): "IP 位址"})
-    ws = load_workbook(BytesIO(result))["內容"]
-    assert (ws["B6"].value, ws["B7"].value, ws["B8"].value, ws["B11"].value) == ("80", "SYN", "SYN-ACK", "IP 位址")
-    assert ws["C5"].value == "【第一部分】"
+def test_build_writes_singles_groups_and_blanks():
+    parsed = parse_spreadsheet(grid([
+        ["標題"],
+        ["題號", "題目", "作答"],
+        ["1", "牛頓第一定律又稱為 ____ 定律", ""],
+        ["2", "題組", "（1）"],
+        ["", "", "(2)"],
+        ["3", "沒人答", "舊答案"],
+        ["4", "沒人答的題組", "（1）"],
+    ]))
+    writes = build_writes(parsed, {(1, None): "慣性", (2, 1): "A", (2, 2): "=B"})
+    assert writes == {"C3": "慣性", "C4": "（1）A", "C5": "(2)=B", "C6": "", "C7": "（1）"}
 
 
-# --- Google Sheets 網址（不變） ---
-
-def test_spreadsheet_id_parsing():
-    assert spreadsheet_id("https://docs.google.com/spreadsheets/d/abc_DEF-123/edit#gid=0") == "abc_DEF-123"
-
-
-@pytest.mark.parametrize("url", ["https://evil.com/spreadsheets/d/abc", "https://docs.google.com/document/d/x", "ftp://docs.google.com/spreadsheets/d/a"])
-def test_bad_urls(url):
-    with pytest.raises(SheetsUrlError):
-        spreadsheet_id(url)
-
-
-def test_download_success_uses_export_url():
-    seen = []
-    xlsx = group_workbook()
-
-    def fake_fetch(url):
-        seen.append(url)
-        return xlsx
-
-    assert download_xlsx("https://docs.google.com/spreadsheets/d/XYZ/edit", fetch=fake_fetch) == xlsx
-    assert seen == ["https://docs.google.com/spreadsheets/d/XYZ/export?format=xlsx"]
+def test_written_sheet_can_be_reimported_and_rewritten():
+    rows = [["題號", "題目", "作答"], ["1", "", ""], ["2", "", "（1）"], ["", "", "（2）"]]
+    parsed = parse_spreadsheet(grid(rows))
+    writes = build_writes(parsed, {(1, None): "CPU", (2, 1): "演算法", (2, 2): "堆疊"})
+    for a1, value in writes.items():  # 模擬寫回雲端後的試算表
+        rows[int(a1[1:]) - 1][2] = value
+    again = parse_spreadsheet(grid(rows))
+    assert again.structure() == parsed.structure() == [(1, 0), (2, 2)]
+    assert build_writes(again, {(2, 1): "新答案"}) == {"C2": "", "C3": "（1）新答案", "C4": "（2）"}
 
 
-def test_download_private_sheet_returns_html():
-    with pytest.raises(SheetsUrlError, match="知道連結的人皆可檢視"):
-        download_xlsx("https://docs.google.com/spreadsheets/d/XYZ", fetch=lambda u: b"<html>login</html>")
+def test_build_writes_on_moved_sample():
+    parsed = parse_spreadsheet(spreadsheet_from_xlsx(SAMPLES["sample-moved.xlsx"]()))
+    assert parsed.sheet_title == "內容"
+    writes = build_writes(parsed, {(1, None): "80", (2, 1): "SYN", (2, 2): "SYN-ACK", (3, None): "IP 位址"})
+    assert writes == {"B6": "80", "B7": "(1)SYN", "B8": "(2)SYN-ACK", "B11": "IP 位址"}
 
 
-def test_download_network_error():
-    def boom(url):
-        raise OSError("network down")
-
-    with pytest.raises(SheetsUrlError, match="無法下載"):
-        download_xlsx("https://docs.google.com/spreadsheets/d/XYZ", fetch=boom)
+def test_ragged_rows_and_none_values():
+    parsed = parse_spreadsheet(grid([["題號", None, "作答"], ["1"], ["2", "x"]]))
+    assert parsed.structure() == [(1, 0), (2, 0)] and parsed.cells[(1, None)] == "C2"
 
 
 # --- 1.4 範例檔 ---
@@ -200,14 +173,12 @@ def test_teacher_single_layout_locations():
     assert [q.locations for q in qs[:3]] == [["學習單!G5"], ["學習單!G7"], ["學習單!G9"]]
 
 
-def test_teacher_group_layout_and_export_into_merged_cells():
+def test_teacher_group_layout_and_writes():
     data = SAMPLES["teacher-layout-group.xlsx"]()
-    qs = parse_guided_notes(data)
-    assert [(q.number, q.sub_count, q.locations) for q in qs] == [
+    parsed = parse_spreadsheet(spreadsheet_from_xlsx(data))
+    assert [(q.number, q.sub_count, q.locations) for q in parsed.questions] == [
         (1, 2, ["學習單!G5", "學習單!G6"]), (2, 2, ["學習單!G8", "學習單!G9"]),
         (3, 0, ["學習單!G11"]), (4, 0, ["學習單!G13"]),
     ]
-    result = fill_answers(data, {(1, 1): "CPU", (1, 2): "作業系統", (3, None): "0"})
-    ws = load_workbook(BytesIO(result))["學習單"]
-    assert (ws["G5"].value, ws["G6"].value, ws["G8"].value, ws["G11"].value, ws["G13"].value) == ("CPU", "作業系統", "（1）", "0", None)
-    assert "G11:H11" in {str(m) for m in ws.merged_cells.ranges}  # 合併儲存格保持不變
+    writes = build_writes(parsed, {(1, 1): "CPU", (1, 2): "作業系統", (3, None): "0"})
+    assert writes == {"G5": "（1）CPU", "G6": "（2）作業系統", "G8": "（1）", "G9": "（2）", "G11": "0", "G13": ""}

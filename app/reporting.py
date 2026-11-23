@@ -6,6 +6,7 @@ from datetime import datetime
 from io import StringIO
 
 from app.activity import PHASE_LABELS, Activity, Identity, Phase, group_name
+from app.google_sheets import spreadsheet_url
 
 CSV_HEADER = ["題號", "組別", "答案", "搶答順位", "是否搶答成功", "送出時間"]
 
@@ -81,6 +82,7 @@ def view_for(activity: Activity, identity: Identity) -> dict:
         if is_teacher:
             view["results"] = build_results(activity)
             view["members"] = {str(g): names for g, names in activity.members().items()}
+            view["spreadsheet_url"] = spreadsheet_url(activity.sheet_id) if activity.sheet_id else None
             return view
 
         mine = {

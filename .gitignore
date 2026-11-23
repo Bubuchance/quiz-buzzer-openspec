@@ -6,3 +6,7 @@ __pycache__/
 .env
 *.env
 exports/
+
+# Google 服務帳號金鑰：只放本機，絕對不要進 repo
+credentials/
+*service-account*.json

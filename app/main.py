@@ -8,22 +8,20 @@ import asyncio
 import os
 import secrets
 from pathlib import Path
-from typing import Callable
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.activity import Activity, ActivityError, Identity
-from app.guided_notes import GuidedNotesError, fill_answers
+from app.google_sheets import GoogleSheetsGateway, SheetsError, SheetsGateway, spreadsheet_id, spreadsheet_url
+from app.guided_notes import GuidedNotesError
 from app.reporting import results_csv, view_for
-from app.sheets_url import SheetsUrlError, download_xlsx
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 class LoginBody(BaseModel):
@@ -80,22 +78,27 @@ def generate_passcode() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def create_app(passcode: str | None = None, fetch: Callable[[str], bytes] | None = None) -> FastAPI:
+def create_app(passcode: str | None = None, gateway: SheetsGateway | None = None) -> FastAPI:
     activity = Activity(teacher_passcode=passcode or os.environ.get("TEACHER_PASSCODE") or generate_passcode())
+    sheets = gateway or GoogleSheetsGateway()
     hub = Hub(activity)
     timers: set[asyncio.Task] = set()  # 保留倒數工作的參照，避免被回收
     app = FastAPI(title="課堂搶答系統")
     app.state.activity = activity
     app.state.hub = hub
+    app.state.sheets = sheets
 
     @app.exception_handler(ActivityError)
     async def activity_error(_request: Request, exc: ActivityError):
         return JSONResponse({"detail": exc.message}, status_code=exc.status)
 
     @app.exception_handler(GuidedNotesError)
-    @app.exception_handler(SheetsUrlError)
     async def input_error(_request: Request, exc: ValueError):
         return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.exception_handler(SheetsError)
+    async def sheets_error(_request: Request, exc: SheetsError):
+        return JSONResponse({"detail": exc.message}, status_code=exc.status)
 
     # ---------- 身分相依 ----------
 
@@ -163,22 +166,15 @@ def create_app(passcode: str | None = None, fetch: Callable[[str], bytes] | None
 
     # ---------- 老師 ----------
 
-    @app.post("/api/teacher/import/file")
-    async def import_file(file: UploadFile = File(...), _t: Identity = Depends(require_teacher)):
-        data = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise ActivityError("檔案太大（超過 20 MB）")
-        activity.import_notes(data, file.filename or "guided-notes.xlsx")
-        await hub.broadcast()
-        return {**ok(), "question_count": len(activity.questions)}
+    @app.get("/api/teacher/sheets-status")
+    async def sheets_status(_t: Identity = Depends(require_teacher)):
+        return sheets.status()
 
     @app.post("/api/teacher/import/url")
     async def import_url(body: UrlBody, _t: Identity = Depends(require_teacher)):
-        if fetch is None:
-            data = await run_in_threadpool(download_xlsx, body.url)
-        else:
-            data = await run_in_threadpool(download_xlsx, body.url, fetch)
-        activity.import_notes(data, "google-sheets.xlsx")
+        sheet_id = spreadsheet_id(body.url)
+        spreadsheet = await run_in_threadpool(sheets.read, sheet_id)  # 直接讀取雲端試算表
+        activity.import_notes(spreadsheet, sheet_id)
         await hub.broadcast()
         return {**ok(), "question_count": len(activity.questions)}
 
@@ -232,16 +228,14 @@ def create_app(passcode: str | None = None, fetch: Callable[[str], bytes] | None
         return {"Content-Disposition":
                 f"attachment; filename=\"{ascii_stem}-{ascii_suffix}.{ext}\"; filename*=UTF-8''{quote(name)}"}
 
-    @app.get("/api/teacher/export/guided-notes")
-    async def export_notes(_t: Identity = Depends(require_teacher)):
-        if activity.source_bytes is None:
-            raise ActivityError("尚未匯入題目", 409)
-        data = fill_answers(activity.source_bytes, activity.export_answers())
-        return Response(
-            data,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=attachment("搶答答案", "answers", "xlsx"),
-        )
+    @app.post("/api/teacher/export/google-sheets")
+    async def write_back(_t: Identity = Depends(require_teacher)):
+        sheet_id = activity.ensure_can_write_back()
+        fresh = await run_in_threadpool(sheets.read, sheet_id)  # 寫回前重新讀取，比對題目結構
+        sheet_title, updates = activity.prepare_writeback(fresh)
+        await run_in_threadpool(sheets.write, sheet_id, sheet_title, updates)
+        answered = len(activity.winners())
+        return {**ok(), "cells": len(updates), "answered": answered, "url": spreadsheet_url(sheet_id)}
 
     @app.get("/api/teacher/export/csv")
     async def export_csv(_t: Identity = Depends(require_teacher)):

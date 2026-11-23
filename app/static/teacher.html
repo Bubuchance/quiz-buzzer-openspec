@@ -23,21 +23,18 @@
       <button id="btn-close" class="danger big">結束搶答</button>
       <button id="btn-reset" class="ghost">重設（清除作答）</button>
       <span class="spacer"></span>
-      <a id="btn-export-xlsx" class="button">匯出 Guided Notes（寫入答案）</a>
+      <button id="btn-writeback" class="primary">寫回 Google Sheets</button>
       <a id="btn-export-csv" class="button">匯出 CSV</a>
     </section>
 
     <div class="grid">
       <section class="card">
-        <h2>1. 匯入 Guided Notes</h2>
+        <h2>1. 匯入 Guided Notes（雲端 Google Sheets）</h2>
+        <div id="sheets-status" class="sheets-status" aria-live="polite">檢查 Google Sheets 設定中…</div>
         <p class="muted small">學習單需有「題號」「作答」欄位標題；題組在作答欄寫（1）（2）…，後續小題放在下方列、題號欄留空。</p>
-        <form id="file-form" class="row">
-          <input id="file" type="file" accept=".xlsx" aria-label="選擇 xlsx 檔案">
-          <button type="submit">上傳 .xlsx</button>
-        </form>
         <form id="url-form" class="row">
-          <input id="url" type="url" placeholder="或貼上 Google Sheets 網址（需設為知道連結的人皆可檢視）" aria-label="Google Sheets 網址">
-          <button type="submit">從網址匯入</button>
+          <input id="url" type="text" placeholder="貼上 Google Sheets 網址（https://docs.google.com/spreadsheets/d/...）" aria-label="Google Sheets 網址">
+          <button type="submit">匯入</button>
         </form>
         <div id="questions"></div>
       </section>

@@ -4,9 +4,17 @@ from io import StringIO
 import pytest
 
 from app.activity import Activity, ActivityError, Phase
-from app.guided_notes import GuidedNotesError
+from app.guided_notes import GuidedNotesError, SheetGrid, Spreadsheet, spreadsheet_from_xlsx
 from app.reporting import CSV_HEADER, build_results, results_csv, view_for
-from samples.make_samples import group_workbook, single_workbook
+from samples.make_samples import group_workbook, single_workbook as _single_xlsx
+
+
+def group_sheet():
+    return spreadsheet_from_xlsx(group_workbook(), "UML 學習單")
+
+
+def single_workbook():
+    return spreadsheet_from_xlsx(_single_xlsx(), "單題學習單")
 
 
 class FakeClock:
@@ -28,7 +36,7 @@ def clock():
 @pytest.fixture
 def act(clock):
     a = Activity(teacher_passcode="123456", clock=clock, wall_clock=lambda: 1_763_366_405.123)
-    a.import_notes(group_workbook(), "uml.xlsx")  # 1,2,4 單題；3 題組(2)；5 題組(3)
+    a.import_notes(group_sheet(), "SHEET-UML")  # 1,2,4 單題；3 題組(2)；5 題組(3)
     return a
 
 
@@ -67,7 +75,7 @@ def test_phase_labels_three_stages(clock):
     a = Activity(teacher_passcode="x", clock=clock)
     t = a.login_teacher("x")
     assert view_for(a, t)["phase_label"] == "準備中" and not view_for(a, t)["has_questions"]
-    a.import_notes(single_workbook(), "s.xlsx")
+    a.import_notes(single_workbook(), "SHEET-S")
     assert view_for(a, t)["phase_label"] == "準備中"
     a.open()
     assert view_for(a, t)["phase_label"] == "搶答中"
@@ -79,12 +87,12 @@ def test_phase_flow(clock):
     a = Activity(teacher_passcode="x", clock=clock)
     with pytest.raises(ActivityError, match="先匯入"):
         a.open()
-    a.import_notes(single_workbook(), "s.xlsx")
+    a.import_notes(single_workbook(), "SHEET-S")
     a.open()
     with pytest.raises(ActivityError):
         a.open()
     with pytest.raises(ActivityError, match="不能匯入"):
-        a.import_notes(single_workbook(), "s.xlsx")
+        a.import_notes(single_workbook(), "SHEET-S")
     with pytest.raises(ActivityError, match="不能重設"):
         a.reset()
     a.close()
@@ -106,14 +114,14 @@ def test_reset_and_reimport_clear_submissions_and_marks(act):
     act.submit(s1, 1, ["a"])
     act.close()
     act.mark(1, "wrong")
-    act.import_notes(single_workbook(), "s.xlsx")
+    act.import_notes(single_workbook(), "SHEET-S")
     assert act.submissions == {} and act.marks == {}
 
 
 def test_failed_import_keeps_old_questions(act):
     with pytest.raises(GuidedNotesError):
-        act.import_notes(b"bad", "bad.xlsx")
-    assert len(act.questions) == 5 and act.source_name == "uml.xlsx"
+        act.import_notes(Spreadsheet("壞的", [SheetGrid("S", [["沒有標題"]])]), "SHEET-BAD")
+    assert len(act.questions) == 5 and act.source_name == "UML 學習單" and act.sheet_id == "SHEET-UML"
 
 
 # --- 設定 ---
@@ -355,3 +363,44 @@ def test_export_answers_maps_group_items(act):
     act.submit(s1, 5, ["單一職責", "開放封閉", "里氏替換"])
     act.submit(s1, 1, ["循序圖"])
     assert act.export_answers() == {(1, None): "循序圖", (5, 1): "單一職責", (5, 2): "開放封閉", (5, 3): "里氏替換"}
+
+
+# --- 寫回雲端 Google Sheets ---
+
+def test_writeback_requires_closed(act):
+    with pytest.raises(ActivityError, match="搶答結束後才能寫回"):
+        act.prepare_writeback(group_sheet())
+    act.open()
+    with pytest.raises(ActivityError, match="搶答結束後才能寫回"):
+        act.ensure_can_write_back()
+
+
+def test_writeback_without_import(clock):
+    a = Activity(teacher_passcode="x", clock=clock)
+    with pytest.raises(ActivityError, match="尚未匯入"):
+        a.ensure_can_write_back()
+
+
+def test_writeback_updates(act):
+    s1, s2 = students(act, 1, 2)
+    act.open()
+    act.submit(s2, 1, ["循序圖"])
+    act.submit(s1, 3, ["聚合", "組合"])
+    act.close()
+    assert act.ensure_can_write_back() == "SHEET-UML"
+    sheet_title, updates = act.prepare_writeback(group_sheet())
+    assert sheet_title == "Guided Notes"
+    assert updates == {"C3": "循序圖", "C4": "", "C5": "（1）聚合", "C6": "（2）組合", "C7": "",
+                       "C8": "（1）", "C9": "（2）", "C10": "（3）"}
+
+
+def test_writeback_rejects_changed_structure(act):
+    act.open()
+    act.close()
+    changed = group_sheet()
+    changed.sheets[0].rows = changed.sheets[0].rows[:-3]  # 刪掉第 5 題（題組）
+    with pytest.raises(ActivityError, match="匯入後被修改"):
+        act.prepare_writeback(changed)
+    broken = Spreadsheet("x", [SheetGrid("S", [["沒有標題"]])])
+    with pytest.raises(ActivityError, match="重新匯入"):
+        act.prepare_writeback(broken)

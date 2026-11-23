@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
-from app.guided_notes import BlankKey, Question, parse_guided_notes
+from app.guided_notes import BlankKey, Question, Spreadsheet, build_writes, parse_spreadsheet
 
 MIN_GROUPS, MAX_GROUPS, DEFAULT_GROUPS = 1, 20, 4
 MIN_DELAY, MAX_DELAY, DEFAULT_DELAY = 1, 30, 3
@@ -77,7 +77,7 @@ class Activity:
     clock: Callable[[], float] = time.monotonic
     wall_clock: Callable[[], float] = time.time
     questions: list[Question] = field(default_factory=list)
-    source_bytes: bytes | None = None
+    sheet_id: str | None = None  # 匯入來源的 Google Sheets 試算表 ID
     source_name: str = ""
     group_count: int = DEFAULT_GROUPS
     fair_mode: bool = False
@@ -125,14 +125,18 @@ class Activity:
 
     # ---------- 老師操作 ----------
 
-    def import_notes(self, data: bytes, source_name: str) -> None:
-        questions = parse_guided_notes(data)  # 格式錯誤會拋出 GuidedNotesError，原題目不變
+    def import_notes(self, spreadsheet: Spreadsheet, sheet_id: str) -> None:
+        """匯入從雲端 Google Sheets 讀到的內容。"""
+        with self._lock:  # 先檢查階段，避免搶答中還去解析
+            if self.phase == Phase.OPEN:
+                raise ActivityError("搶答進行中不能匯入，請先結束搶答", 409)
+        questions = parse_spreadsheet(spreadsheet).questions  # 格式錯誤會拋出 GuidedNotesError，原題目不變
         with self._lock:
             if self.phase == Phase.OPEN:
                 raise ActivityError("搶答進行中不能匯入，請先結束搶答", 409)
             self.questions = questions
-            self.source_bytes = data
-            self.source_name = source_name or "guided-notes.xlsx"
+            self.sheet_id = sheet_id
+            self.source_name = spreadsheet.title or "Google Sheets"
             self._clear_round()
             self.phase = Phase.READY
             self._touch()
@@ -284,6 +288,28 @@ class Activity:
 
     def effective_time(self, s: Submission) -> float:
         return effective_time(s, self.fair_mode, self.fair_delay)
+
+    def ensure_can_write_back(self) -> str:
+        """寫回雲端前的檢查；回傳試算表 ID。"""
+        with self._lock:
+            if self.sheet_id is None:
+                raise ActivityError("尚未匯入 Google Sheets 題目", 409)
+            if self.phase != Phase.CLOSED:
+                raise ActivityError("搶答結束後才能寫回 Google Sheets", 409)
+            return self.sheet_id
+
+    def prepare_writeback(self, fresh: Spreadsheet) -> tuple[str, dict[str, str]]:
+        """以剛從雲端重新讀到的內容，比對結構並計算要寫入的儲存格。回傳 (工作表名稱, {A1: 文字})。"""
+        self.ensure_can_write_back()
+        try:
+            parsed = parse_spreadsheet(fresh)
+        except ValueError as exc:
+            raise ActivityError(f"試算表在匯入後被修改，無法寫回：{exc}。請重新匯入", 409) from exc
+        with self._lock:
+            imported = [(q.number, q.sub_count) for q in self.questions]
+            if parsed.structure() != imported:
+                raise ActivityError("試算表的題目在匯入後被修改（題號或題組小題數不同），請重新匯入後再寫回", 409)
+            return parsed.sheet_title, build_writes(parsed, self.export_answers())
 
     def export_answers(self) -> dict[BlankKey, str]:
         answers: dict[BlankKey, str] = {}
