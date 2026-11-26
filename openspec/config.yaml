@@ -8,10 +8,12 @@ context: |
   專案：課堂搶答系統（2026 軟體工程期末專題，OpenSpec 組）。
   老師匯入 Guided Notes（Google Sheets 填空式學習單）並開關搶答；學生以組別送出答案；
   每題最快送出的組別成功；結果可寫回 Guided Notes 的填空格並匯出 CSV。
-  SpecKit 組做同一套系統，功能必須與本專案一致，修改需求前要先與 SpecKit 組討論。
+  SpecKit 組做同一套系統，功能必須與本專案一致，修改需求前要先與 SpecKit 組討論；
+  行為規則以 docs/speckit/feature-alignment.md 為準。
 
   技術堆疊：
-  - 後端 Python 3.10+、FastAPI、Uvicorn + websockets；xlsx 讀寫用 openpyxl
+  - 後端 Python 3.10+、FastAPI、Uvicorn + websockets
+  - Guided Notes 以 Google Sheets API（gspread、服務帳號）直接讀寫雲端，禁止下載 xlsx 離線處理
   - 前端原生 HTML/CSS/JavaScript（app/static），不使用打包工具
   - 測試 pytest + FastAPI TestClient（含 WebSocket）
   - 只在本機 127.0.0.1 執行，資料只存在記憶體
@@ -19,11 +21,12 @@ context: |
   架構慣例：
   - 規則與狀態放在 app/activity.py（不依賴網路），可見性過濾與報表放在 app/reporting.py
   - 寫入操作走 REST API；WebSocket 只推送依角色過濾後的完整狀態快照
-  - Guided Notes 一律以佔位符 {{n}}／{{n-k}} 動態掃描，禁止寫死儲存格位置
+  - Guided Notes 一律依「題號」「作答」欄位標題動態定位，題組用（1）（2）標示，禁止寫死儲存格位置
   - 錯誤訊息使用中文，可直接顯示給使用者
 
   限制：
-  - 不可在程式碼、文件或 repo 中放入密碼、金鑰或任何機敏資料（老師通行碼用環境變數 TEACHER_PASSCODE）
+  - 不可在程式碼、文件或 repo 中放入密碼、金鑰或任何機敏資料（老師通行碼用環境變數 TEACHER_PASSCODE；
+    Google 服務帳號金鑰放 credentials/，已被 .gitignore 排除）
   - 學生在搶答結束前不得取得其他組別的任何作答資訊
 
 rules:
